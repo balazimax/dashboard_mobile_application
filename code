@@ -1,0 +1,460 @@
+File 1: Backend (server.js)
+Save this inside your root project directory (dashboard_mobile_app/server.js).
+
+  javascript
+
+  require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const { Pool } = require('pg');
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// PostgreSQL Connection Pool Setup
+const pool = new Pool({
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  database: process.env.DB_NAME,
+});
+
+// Middleware
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json());
+
+// GET Aggregated Dashboard Data
+app.get('/api/v1/dashboard', async (req, res) => {
+  try {
+    const remindersResult = await pool.query('SELECT * FROM reminders ORDER BY id DESC');
+    const healthResult = await pool.query('SELECT * FROM health_metrics ORDER BY id DESC LIMIT 1');
+
+    const weatherData = {
+      city: 'York',
+      country: 'UK',
+      description: 'Partly Cloudy',
+      temp_celsius: 18
+    };
+
+    const healthData = healthResult.rows[0] || {
+      steps: 8450,
+      bp_systolic: 120,
+      bp_diastolic: 80,
+      bmi: 23.5
+    };
+
+    res.json({
+      success: true,
+      data: {
+        weather: weatherData,
+        health: healthData,
+        reminders: remindersResult.rows
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch dashboard data' });
+  }
+});
+
+// POST New Reminder
+app.post('/api/v1/reminders', async (req, res) => {
+  const { title, category, due_date } = req.body;
+  try {
+    const query = 'INSERT INTO reminders (title, category, due_date, is_completed) VALUES ($1, $2, $3, false) RETURNING *';
+    const result = await pool.query(query, [title, category || 'bill', due_date]);
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Error adding reminder:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to add reminder' });
+  }
+});
+
+// PATCH Toggle Reminder Completion Status
+app.patch('/api/v1/reminders/:id', async (req, res) => {
+  const { id } = req.params;
+  const { is_completed } = req.body;
+  try {
+    const query = 'UPDATE reminders SET is_completed = $1 WHERE id = $2 RETURNING *';
+    const result = await pool.query(query, [is_completed, id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Reminder not found' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating reminder:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to update reminder' });
+  }
+});
+
+// DELETE Reminder
+app.delete('/api/v1/reminders/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = 'DELETE FROM reminders WHERE id = $1 RETURNING *';
+    const result = await pool.query(query, [id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Reminder not found' });
+    }
+    res.json({ success: true, message: 'Reminder deleted successfully', data: result.rows[0] });
+  } catch (error) {
+    console.error('Error deleting reminder:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to delete reminder' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+Dart
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+
+void main() {
+  runApp(const DashboardApp());
+}
+
+class DashboardApp extends StatelessWidget {
+  const DashboardApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Life Dashboard',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+      ),
+      home: const DashboardScreen(),
+    );
+  }
+}
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  Map<String, dynamic>? dashboardData;
+  bool isLoading = true;
+  Timer? _autoRefreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchDashboardData();
+
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      debugPrint('Auto-refreshing dashboard data...');
+      fetchDashboardData(showLoadingSpinner: false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> fetchDashboardData({bool showLoadingSpinner = true}) async {
+    if (showLoadingSpinner && dashboardData == null) {
+      setState(() => isLoading = true);
+    }
+
+    try {
+      final response = await http.get(Uri.parse('http://127.0.0.1:5000/api/v1/dashboard'));
+      if (response.statusCode == 200) {
+        final body = json.decode(response.body);
+        setState(() {
+          dashboardData = body['data'];
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching dashboard: $e');
+      if (dashboardData != null) {
+        setState(() => isLoading = false);
+      }
+    }
+  }
+
+  Future<void> toggleReminder(int id, bool currentStatus) async {
+    setState(() {
+      final list = dashboardData!['reminders'] as List;
+      final index = list.indexWhere((element) => (element['id'] ?? element['reminder_id']) == id);
+      if (index != -1) {
+        list[index]['is_completed'] = !currentStatus;
+      }
+    });
+
+    try {
+      final response = await http.patch(
+        Uri.parse('http://127.0.0.1:5000/api/v1/reminders/$id'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'is_completed': !currentStatus}),
+      );
+
+      if (response.statusCode != 200) {
+        fetchDashboardData(showLoadingSpinner: false);
+      }
+    } catch (e) {
+      debugPrint('Error toggling reminder: $e');
+      fetchDashboardData(showLoadingSpinner: false);
+    }
+  }
+
+  Future<void> addReminder(String title, String category, String dueDate) async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://127.0.0.1:5000/api/v1/reminders'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'title': title,
+          'category': category,
+          'due_date': dueDate,
+        }),
+      );
+
+      if (response.statusCode == 201) {
+        fetchDashboardData(showLoadingSpinner: false);
+      }
+    } catch (e) {
+      debugPrint('Error adding reminder: $e');
+    }
+  }
+
+  Future<void> deleteReminder(int id) async {
+    setState(() {
+      final list = dashboardData!['reminders'] as List;
+      list.removeWhere((element) => (element['id'] ?? element['reminder_id']) == id);
+    });
+
+    try {
+      final response = await http.delete(
+        Uri.parse('http://127.0.0.1:5000/api/v1/reminders/$id'),
+      );
+
+      if (response.statusCode != 200) {
+        fetchDashboardData(showLoadingSpinner: false);
+      }
+    } catch (e) {
+      debugPrint('Error deleting reminder: $e');
+      fetchDashboardData(showLoadingSpinner: false);
+    }
+  }
+
+  void showAddReminderDialog() {
+    final titleController = TextEditingController();
+    final dueDateController = TextEditingController();
+    String selectedCategory = 'bill';
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Add New Reminder'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Title',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: dueDateController,
+                      decoration: const InputDecoration(
+                        labelText: 'Due Date (e.g., Tomorrow, 5:00 PM)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedCategory,
+                      decoration: const InputDecoration(
+                        labelText: 'Category',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'bill', child: Text('Bill')),
+                        DropdownMenuItem(value: 'event', child: Text('Event')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() => selectedCategory = val);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (titleController.text.isNotEmpty && dueDateController.text.isNotEmpty) {
+                      addReminder(
+                        titleController.text,
+                        selectedCategory,
+                        dueDateController.text,
+                      );
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('All-in-One Dashboard'),
+        backgroundColor: Colors.deepPurple.shade100,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => fetchDashboardData(showLoadingSpinner: true),
+          )
+        ],
+      ),
+      body: isLoading || dashboardData == null
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: () => fetchDashboardData(showLoadingSpinner: false),
+              child: ListView(
+                padding: const EdgeInsets.all(16.0),
+                children: [
+                  Card(
+                    color: Colors.blue.shade50,
+                    elevation: 2,
+                    child: ListTile(
+                      leading: const Icon(Icons.wb_sunny, size: 40, color: Colors.orange),
+                      title: Text(
+                        '${dashboardData!['weather']['city']}, ${dashboardData!['weather']['country']}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text(dashboardData!['weather']['description']),
+                      trailing: Text(
+                        '${dashboardData!['weather']['temp_celsius']}°C',
+                        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Card(
+                    color: Colors.green.shade50,
+                    elevation: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.favorite, color: Colors.red),
+                              SizedBox(width: 8),
+                              Text('Health Summary', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                          const Divider(),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              Column(children: [
+                                const Text('Steps', style: TextStyle(color: Colors.grey)),
+                                Text('${dashboardData!['health']['steps']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              ]),
+                              Column(children: [
+                                const Text('BP', style: TextStyle(color: Colors.grey)),
+                                Text('${dashboardData!['health']['bp_systolic']}/${dashboardData!['health']['bp_diastolic']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              ]),
+                              Column(children: [
+                                const Text('BMI', style: TextStyle(color: Colors.grey)),
+                                Text('${dashboardData!['health']['bmi']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              ]),
+                            ],
+                          )
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Upcoming Reminders', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  ...List<Widget>.from(dashboardData!['reminders'].map((item) {
+                    final bool isCompleted = item['is_completed'] ?? false;
+                    final int reminderId = item['id'] ?? item['reminder_id'];
+                    return Card(
+                      child: ListTile(
+                        leading: Icon(
+                          item['category'] == 'bill' ? Icons.receipt_long : Icons.event,
+                          color: item['category'] == 'bill' ? Colors.orange : Colors.purple,
+                        ),
+                        title: Text(
+                          item['title'],
+                          style: TextStyle(
+                            decoration: isCompleted ? TextDecoration.lineThrough : TextDecoration.none,
+                            color: isCompleted ? Colors.grey : Colors.black,
+                          ),
+                        ),
+                        subtitle: Text('Due: ${item['due_date']}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                isCompleted ? Icons.check_circle : Icons.radio_button_unchecked,
+                                color: isCompleted ? Colors.green : Colors.grey,
+                              ),
+                              onPressed: () => toggleReminder(reminderId, isCompleted),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                              onPressed: () => deleteReminder(reminderId),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  })),
+                ],
+              ),
+            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: showAddReminderDialog,
+        tooltip: 'Add Reminder',
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
